@@ -3,6 +3,7 @@
 
 mod lang_items;
 mod console;
+mod sbi;
 
 const SYSCALL_EXIT: usize = 93;
 const SYSCALL_WRITE: usize = 64;
@@ -29,8 +30,10 @@ pub fn sys_write(fd: usize, buffer: &[u8]) -> isize {
     syscall(SYSCALL_WRITE, [fd, buffer.as_ptr() as usize, buffer.len()])
 }
 
+core::arch::global_asm!(include_str!("entry.asm"));
+
 #[no_mangle]
-extern "C" fn _start() {
-    println!("Hello, world!");
-    sys_exit(9);
+pub fn rust_main() -> ! {
+    // println!("Hello, world!");
+    sbi::shutdown();
 }
