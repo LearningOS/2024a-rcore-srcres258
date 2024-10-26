@@ -11,6 +11,7 @@
 
 mod context;
 mod switch;
+mod info;
 #[allow(clippy::module_inception)]
 mod task;
 
@@ -22,6 +23,7 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+pub use info::TaskInfo;
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -53,6 +55,7 @@ lazy_static! {
         let num_app = get_num_app();
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
+            task_info: TaskInfo::zero_init(),
             task_status: TaskStatus::UnInit,
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
