@@ -1,7 +1,12 @@
 //! Process management syscalls
 use crate::{
     config::MAX_SYSCALL_NUM,
-    task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus},
+    task::{
+        exit_current_and_run_next,
+        suspend_current_and_run_next,
+        op_on_current_task,
+        TaskStatus
+    },
     timer::get_time_us,
 };
 
@@ -51,7 +56,34 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
-pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
+pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
     trace!("kernel: sys_task_info");
-    -1
+
+    let mut status = None;
+    let mut syscall_times = [0; MAX_SYSCALL_NUM];
+    let mut start_time = None;
+
+    op_on_current_task(|block| {
+        status = Some(block.task_status);
+        for (i, times) in block.task_info.syscall_times.iter().enumerate() {
+            syscall_times[i] = *times;
+        }
+        start_time = block.task_info.start_time;
+    });
+
+    let current_time = get_time_us();
+    let delta_time = match start_time {
+        Some(start) => current_time - start,
+        None => 0, // task has not been started yet
+    };
+    // Note that the unit of `delta_time` is microseconds.
+    // We should convert it to milliseconds.
+    let delta_time_ms = delta_time / 1_000;
+    unsafe {
+        (*ti).status = status.unwrap();
+        (*ti).syscall_times = syscall_times;
+        (*ti).time = delta_time_ms;
+    }
+
+    0
 }

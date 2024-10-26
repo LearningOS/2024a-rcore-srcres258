@@ -18,6 +18,7 @@ mod task;
 use crate::config::MAX_APP_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_us;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
@@ -84,6 +85,8 @@ impl TaskManager {
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
+        // Record the start time of the task before running it.
+        task0.task_info.start_time = Some(get_time_us());
         drop(inner);
         let mut _unused = TaskContext::zero_init();
         // before this, we should drop local variables that must be dropped manually
@@ -128,6 +131,10 @@ impl TaskManager {
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
+            // Record the start time of the next task if not recorded (i.e. not started) yet.
+            if let None = inner.tasks[next].task_info.start_time {
+                inner.tasks[next].task_info.start_time = Some(get_time_us());
+            }
             drop(inner);
             // before this, we should drop local variables that must be dropped manually
             unsafe {
