@@ -138,6 +138,26 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// Run a closure with TaskControlBlock reference on the current task.
+    ///
+    /// Mainly used for querying and modifying information of the current task.
+    fn op_on_current_task<F: FnOnce(&TaskControlBlock)>(&self, f: F) {
+        let inner = self.inner.exclusive_access_immutable();
+        let current = inner.current_task;
+        f(&inner.tasks[current]);
+        drop(inner);
+    }
+
+    /// Run a closure with mutable TaskControlBlock reference on the current task.
+    ///
+    /// Mainly used for querying and modifying information of the current task.
+    fn op_on_current_task_mut<F: FnOnce(&mut TaskControlBlock)>(&self, f: F) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        f(&mut inner.tasks[current]);
+        drop(inner);
+    }
 }
 
 /// Run the first task in task list.
@@ -171,4 +191,20 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// Run a closure with TaskControlBlock reference on the current task.
+pub fn op_on_current_task<F>(f: F)
+where
+    F: FnOnce(&TaskControlBlock),
+{
+    TASK_MANAGER.op_on_current_task(f);
+}
+
+/// Run a closure with mutable TaskControlBlock reference on the current task.
+pub fn op_on_current_task_mut<F>(f: F)
+where
+    F: FnOnce(&mut TaskControlBlock),
+{
+    TASK_MANAGER.op_on_current_task_mut(f);
 }
