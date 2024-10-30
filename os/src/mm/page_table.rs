@@ -1,6 +1,7 @@
 //! Implementation of [`PageTableEntry`] and [`PageTable`].
 
 use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
+use crate::task::current_user_token;
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
@@ -170,4 +171,50 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
         start = end_va.into();
     }
     v
+}
+
+/// Copy an [u8] slice in the kernel space to an [u8] address in the user space.
+///
+/// It's assumed that the capacity of the [u8] address in the user space is able to contain
+/// the data of the [u8] slice in the kernel space.
+pub fn copy_byte_buffer_to_user(token: usize, dest_ptr: *mut u8, src: &[u8]) {
+    // Different u8 slices are on different physical pages.
+    let mut dest = translated_byte_buffer(token, dest_ptr, src.len());
+    let mut cur_dest_buf_idx = 0;
+    let mut cur_dest_buf = &mut dest[cur_dest_buf_idx];
+    let mut last_copied = 0;
+
+    for (i, b) in src.iter().enumerate() {
+        if i - last_copied == cur_dest_buf.len() {
+            cur_dest_buf_idx += 1;
+            cur_dest_buf = &mut dest[cur_dest_buf_idx];
+            last_copied = i;
+        }
+
+        cur_dest_buf[i - last_copied] = *b;
+    }
+}
+
+/// Copy a struct data of the given type [T] in the kernel space to an [T] address
+/// in the user space.
+///
+/// It's assumed that the pointer data on the user space has the same size as the
+/// referenced data of the kernel space.
+pub fn copy_data_to_user<T: Sized>(token: usize, dest_ptr: *mut T, src: &T) {
+    // Convert the struct data to a u8 slice.
+    let src_data = unsafe {
+        core::slice::from_raw_parts((src as *const T) as *const u8, core::mem::size_of::<T>())
+    };
+    // Then copy the data.
+    copy_byte_buffer_to_user(token, dest_ptr as *mut u8, src_data);
+}
+
+/// Copy a struct data of the given type [T] in the kernel space to an [T] address
+/// in the user space of the current task.
+///
+/// It's assumed that the pointer data on the user space has the same size as the
+/// referenced data of the kernel space.
+pub fn copy_data_to_current_user<T: Sized>(dest_ptr: *mut T, src: &T) {
+    let current_token = current_user_token();
+    copy_data_to_user(current_token, dest_ptr, src);
 }

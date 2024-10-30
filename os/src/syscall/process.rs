@@ -4,7 +4,9 @@ use crate::{
     task::{
         change_program_brk, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus,
     },
+    mm::copy_data_to_current_user
 };
+use crate::timer::get_time_us;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -41,9 +43,20 @@ pub fn sys_yield() -> isize {
 /// YOUR JOB: get time with second and microsecond
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
-    -1
+
+    // Create our version of TimeVal on the kernel stack.
+    let us = get_time_us();
+    let ts_kernel = TimeVal {
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+
+    // Then copy the TimeVal data from the kernel space to the user space.
+    copy_data_to_current_user(ts, &ts_kernel);
+
+    0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
