@@ -11,6 +11,7 @@
 
 mod context;
 mod switch;
+mod info;
 #[allow(clippy::module_inception)]
 mod task;
 
@@ -23,6 +24,7 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+pub use info::TaskInfo;
 
 /// The task manager, where all the tasks are managed.
 ///
