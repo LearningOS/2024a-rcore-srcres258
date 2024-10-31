@@ -2,7 +2,11 @@
 use crate::{
     config::MAX_SYSCALL_NUM,
     task::{
-        change_program_brk, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus,
+        change_program_brk,
+        exit_current_and_run_next,
+        suspend_current_and_run_next,
+        op_on_current_task,
+        TaskStatus,
     },
     mm::copy_data_to_current_user
 };
@@ -62,9 +66,39 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
 /// YOUR JOB: Finish sys_task_info to pass testcases
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TaskInfo`] is splitted by two pages ?
-pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
+pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
     trace!("kernel: sys_task_info NOT IMPLEMENTED YET!");
-    -1
+
+    let mut status = None;
+    let mut syscall_times = [0; MAX_SYSCALL_NUM];
+    let mut start_time = None;
+
+    op_on_current_task(|block| {
+        status = Some(block.task_status);
+        for (i, times) in block.task_info.syscall_times.iter().enumerate() {
+            syscall_times[i] = *times;
+        }
+        start_time = block.task_info.start_time;
+    });
+
+    let current_time = get_time_us();
+    let delta_time = match start_time {
+        Some(start) => current_time - start,
+        None => 0, // task has not been started yet
+    };
+    // Note that the unit of `delta_time` is microseconds.
+    // We should convert it to milliseconds.
+    let delta_time_ms = delta_time / 1000;
+    // Create our version of TaskInfo on the kernel stack.
+    let ti_kernel = TaskInfo {
+        status: status.unwrap(),
+        syscall_times,
+        time: delta_time_ms
+    };
+    // Then copy it to the user space.
+    copy_data_to_current_user(ti, &ti_kernel);
+
+    0
 }
 
 // YOUR JOB: Implement mmap.
