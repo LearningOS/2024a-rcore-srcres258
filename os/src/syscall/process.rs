@@ -1,6 +1,9 @@
 //! Process management syscalls
 use crate::{
-    config::MAX_SYSCALL_NUM,
+    config::{
+        MAX_SYSCALL_NUM,
+        PAGE_SIZE
+    },
     task::{
         change_program_brk,
         exit_current_and_run_next,
@@ -8,8 +11,15 @@ use crate::{
         op_on_current_task,
         TaskStatus,
     },
-    mm::copy_data_to_current_user
+    mm::{
+        copy_data_to_current_user,
+        VirtAddr,
+        VirtPageNum,
+        MapPermission,
+        VPNRange
+    }
 };
+use crate::task::op_on_current_task_mut;
 use crate::timer::get_time_us;
 
 #[repr(C)]
@@ -102,15 +112,135 @@ pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
 }
 
 // YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
-    -1
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
+    info!("sys_mmap: start = {}, len = {}, port = {}", start, len, port);
+
+    // Check the validity of the arguments at first.
+    // Argument: start
+    // Requirement: Aligned by page size.
+    let va_start = VirtAddr(start);
+    if !va_start.aligned() {
+        return -1;
+    }
+    // Argument: port
+    // Requirement: At least one of the 0th, 1st or 2nd digit is set to 1,
+    // and the other digits must be 0.
+    if port & !0x7 != 0 {
+        return -1;
+    }
+    if port & 0x7 == 0 {
+        return -1;
+    }
+
+    // Convert len in bytes to len in memory pages
+    let mut len_page = len / PAGE_SIZE;
+    // If there are tail bytes that do not meet up with one page size,
+    // put them into one memory page directly.
+    if len % PAGE_SIZE > 0 {
+        len_page += 1;
+    } else if len == 0 {
+        len_page = 1;
+    }
+    // Get the memory permission (R/W/X).
+    let mem_r = port & 1 == 1;
+    let mem_w = (port >> 1) & 1 == 1;
+    let mem_x = (port >> 2) & 1 == 1;
+    // Calculate the ending virtual address.
+    let vpn_start = VirtPageNum::from(va_start);
+    let mut vpn_end = vpn_start;
+    vpn_end.0 += len_page;
+    let va_end = VirtAddr::from(vpn_end);
+    // Construct information for the virtual memory section being mapped.
+    let mut map_perm = MapPermission::U; // accessible from user level
+    if mem_r {
+        map_perm |= MapPermission::R;
+    }
+    if mem_w {
+        map_perm |= MapPermission::W;
+    }
+    if mem_x {
+        map_perm |= MapPermission::X;
+    }
+    info!("vpn_start = {}, vpn_end = {}, mem_r = {}, mem_w = {}, mem_x = {}", vpn_start.0, vpn_end.0, mem_r, mem_w, mem_x);
+    // Check whether the given virtual address has been already recorded to be mapped.
+    let mut exist_record = false;
+    op_on_current_task(|block| {
+        for (s, _l) in block.mmap_records.iter() {
+            if *s == vpn_start {
+                exist_record = true;
+                break;
+            }
+        }
+    });
+    if exist_record {
+        return -1;
+    }
+    // Check whether there are some virtual addresses which have already been
+    // mapped in the memory set of the current task within the mem_area range.
+    let mut exist_mapped = false;
+    op_on_current_task(|block| {
+        for vpn in VPNRange::new(vpn_start, vpn_end) {
+            if block.memory_set.is_mapped(vpn) {
+                info!("page {} is mapped!", vpn.0);
+                exist_mapped = true;
+                break;
+            }
+            info!("page {} is not mapped!", vpn.0);
+        }
+    });
+    if exist_mapped {
+        return -1;
+    }
+
+    info!("va_start = {}, va_end = {}, map_perm = {:?}", va_start.0, va_end.0, map_perm);
+    op_on_current_task_mut(|block| {
+        // Map the virtual memory section in the memory set of the current task.
+        block.memory_set.insert_framed_area(va_start, va_end, map_perm);
+        // Record this mmap operation.
+        block.mmap_records.push((vpn_start, len));
+    });
+
+    info!("sys_mmap finished!");
+    
+    0
 }
 
 // YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
-    -1
+pub fn sys_munmap(start: usize, len: usize) -> isize {
+    // Check the validity of the arguments at first.
+    // Argument: start
+    // Requirement: Aligned by page size.
+    let va_start = VirtAddr(start);
+    if !va_start.aligned() {
+        return -1;
+    }
+
+    // Check whether there are a matching mmap record for the current task,
+    // and get the matching record.
+    let vpn_start = VirtPageNum::from(va_start);
+    let mut idx = None;
+    op_on_current_task(|block| {
+        for (i, (s, l)) in block.mmap_records.iter().enumerate() {
+            if *s == vpn_start && *l == len {
+                idx = Some(i);
+                break;
+            }
+        }
+    });
+    if idx.is_none() {
+        return -1;
+    }
+
+    op_on_current_task_mut(|block| {
+        // Unmap the virtual memory section in the memory set of the current task.
+        block.memory_set.unmap_framed_area(va_start);
+        // Remove the mmap operation record.
+        block.mmap_records.remove(idx.unwrap());
+    });
+
+    info!("sys_munmap finished!");
+
+    0
 }
 /// change data segment size
 pub fn sys_sbrk(size: i32) -> isize {
