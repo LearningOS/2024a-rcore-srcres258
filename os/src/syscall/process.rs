@@ -113,8 +113,6 @@ pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
 
 // YOUR JOB: Implement mmap.
 pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
-    info!("sys_mmap: start = {}, len = {}, port = {}", start, len, port);
-
     // Check the validity of the arguments at first.
     // Argument: start
     // Requirement: Aligned by page size.
@@ -161,7 +159,6 @@ pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
     if mem_x {
         map_perm |= MapPermission::X;
     }
-    info!("vpn_start = {}, vpn_end = {}, mem_r = {}, mem_w = {}, mem_x = {}", vpn_start.0, vpn_end.0, mem_r, mem_w, mem_x);
     // Check whether the given virtual address has been already recorded to be mapped.
     let mut exist_record = false;
     op_on_current_task(|block| {
@@ -181,26 +178,21 @@ pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
     op_on_current_task(|block| {
         for vpn in VPNRange::new(vpn_start, vpn_end) {
             if block.memory_set.is_mapped(vpn) {
-                info!("page {} is mapped!", vpn.0);
                 exist_mapped = true;
                 break;
             }
-            info!("page {} is not mapped!", vpn.0);
         }
     });
     if exist_mapped {
         return -1;
     }
 
-    info!("va_start = {}, va_end = {}, map_perm = {:?}", va_start.0, va_end.0, map_perm);
     op_on_current_task_mut(|block| {
         // Map the virtual memory section in the memory set of the current task.
         block.memory_set.insert_framed_area(va_start, va_end, map_perm);
         // Record this mmap operation.
         block.mmap_records.push((vpn_start, len));
     });
-
-    info!("sys_mmap finished!");
     
     0
 }
