@@ -97,7 +97,7 @@ impl TaskControlBlockInner {
 impl TaskControlBlock {
     /// Create a new process
     ///
-    /// At present, it is only used for the creation of initproc
+    /// At present, it is only used for the creation of initproc and spawning of subprocesses.
     pub fn new(elf_data: &[u8]) -> Self {
         // memory_set with elf program headers/trampoline/trap context/user stack
         let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
@@ -215,6 +215,24 @@ impl TaskControlBlock {
         task_control_block
         // **** release child PCB
         // ---- release parent PCB
+    }
+    
+    /// Spawn a child process with the given elf data.
+    pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
+        // Create the child process.
+        let child = Self::new(elf_data);
+        // Set the parent process for the child process.
+        let mut inner = self.inner_exclusive_access();
+        inner.parent = Some(Arc::downgrade(self));
+        drop(inner);
+        // Wrap the process into Arc.
+        let child = Arc::new(child);
+        // Mark the child process as one of the children of self.
+        let mut inner = self.inner_exclusive_access();
+        inner.children.push(child.clone());
+        drop(inner);
+        
+        child
     }
 
     /// get pid of process
