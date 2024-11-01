@@ -1,5 +1,5 @@
 //! Types related to task management & Functions for completely changing TCB
-use super::TaskContext;
+use super::{TaskContext, TaskInfo};
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 use crate::config::TRAP_CONTEXT_BASE;
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
@@ -49,6 +49,9 @@ pub struct TaskControlBlockInner {
 
     /// Maintain the execution status of the current process
     pub task_status: TaskStatus,
+
+    /// The task recorded information
+    pub task_info: TaskInfo,
 
     /// Application address space
     pub memory_set: MemorySet,
@@ -118,6 +121,7 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    task_info: TaskInfo::zero_init()
                 })
             },
         };
@@ -191,6 +195,7 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    task_info: TaskInfo::zero_init()
                 })
             },
         });

@@ -18,6 +18,7 @@ mod id;
 mod manager;
 mod processor;
 mod switch;
+mod info;
 #[allow(clippy::module_inception)]
 mod task;
 
@@ -29,6 +30,7 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+pub use info::TaskInfo;
 pub use id::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 pub use manager::add_task;
 pub use processor::{
