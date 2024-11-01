@@ -307,7 +307,7 @@ pub fn sys_munmap(start: usize, len: usize) -> isize {
     if idx.is_none() {
         return -1;
     }
-    
+
     let task = current_task().unwrap();
     let mut inner = task.inner_exclusive_access();
     // Unmap the virtual memory section in the memory set of the current task.
@@ -316,7 +316,7 @@ pub fn sys_munmap(start: usize, len: usize) -> isize {
     inner.mmap_records.remove(idx.unwrap());
     drop(inner);
     drop(task);
-    
+
     0
 }
 
@@ -337,7 +337,7 @@ pub fn sys_spawn(path: *const u8) -> isize {
         "kernel:pid[{}] sys_spawn",
         current_task().unwrap().pid.0
     );
-    
+
     let token = current_user_token();
     let path = translated_str(token, path);
 
@@ -355,10 +355,25 @@ pub fn sys_spawn(path: *const u8) -> isize {
 }
 
 // YOUR JOB: Set task priority.
-pub fn sys_set_priority(_prio: isize) -> isize {
+pub fn sys_set_priority(prio: isize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_set_priority",
         current_task().unwrap().pid.0
     );
-    -1
+
+    // Check the validity of the arguments at first.
+    // Argument: prio
+    // Requirement: Bigger than or equal to 2.
+    if prio < 2 {
+        return -1;
+    }
+
+    let prio_ = prio as u64;
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    inner.task_info.priority = prio_;
+    drop(inner);
+    drop(task);
+
+    prio
 }
