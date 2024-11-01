@@ -2,7 +2,7 @@
 use super::{TaskContext, TaskInfo};
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 use crate::config::TRAP_CONTEXT_BASE;
-use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::mm::{MemorySet, PhysPageNum, VirtAddr, VirtPageNum, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
@@ -71,6 +71,10 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// `mmap` records used to manage mapped virtual pages by this task
+    /// through syscalls.
+    pub mmap_records: Vec<(VirtPageNum, usize)>
 }
 
 impl TaskControlBlockInner {
@@ -121,7 +125,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
-                    task_info: TaskInfo::zero_init()
+                    task_info: TaskInfo::zero_init(),
+                    mmap_records: Vec::new()
                 })
             },
         };
@@ -195,7 +200,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
-                    task_info: TaskInfo::zero_init()
+                    task_info: TaskInfo::zero_init(),
+                    mmap_records: Vec::new()
                 })
             },
         });

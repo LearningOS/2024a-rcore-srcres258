@@ -140,6 +140,12 @@ impl PageTable {
         assert!(pte.is_valid(), "vpn {:?} is invalid before unmapping", vpn);
         *pte = PageTableEntry::empty();
     }
+    /// query if the given virtual page number has been mapped to some certain physical page number
+    #[allow(unused)]
+    pub fn is_mapped(&self, vpn: VirtPageNum) -> bool {
+        let pte = self.find_pte(vpn);
+        pte.is_some() && pte.unwrap().is_valid()
+    }
     /// get the page table entry from the virtual page number
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.find_pte(vpn).map(|pte| *pte)

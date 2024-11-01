@@ -60,6 +60,20 @@ impl MemorySet {
             None,
         );
     }
+    /// Assume that no conflicts.
+    pub fn unmap_framed_area(&mut self, start_va: VirtAddr) {
+        let mut idx = None;
+        for (i, area) in self.areas.iter().enumerate() {
+            if area.vpn_range.get_start().0 == start_va.floor().0 {
+                idx = Some(i);
+                break;
+            }
+        }
+        if let Some(i) = idx {
+            let mut area = self.areas.remove(i);
+            area.unmap(&mut self.page_table);
+        }
+    }
     /// remove a area
     pub fn remove_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) {
         if let Some((idx, area)) = self
@@ -264,6 +278,12 @@ impl MemorySet {
     /// Translate a virtual page number to a page table entry
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.page_table.translate(vpn)
+    }
+    
+    /// Query if the given virtual page number has been mapped to some certain physical page number.
+    #[allow(unused)]
+    pub fn is_mapped(&self, vpn: VirtPageNum) -> bool {
+        self.page_table.is_mapped(vpn)
     }
 
     ///Remove all `MapArea`
