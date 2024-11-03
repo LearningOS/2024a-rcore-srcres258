@@ -18,6 +18,7 @@ mod id;
 mod manager;
 mod processor;
 mod switch;
+mod info;
 #[allow(clippy::module_inception)]
 #[allow(rustdoc::private_intra_doc_links)]
 mod task;
@@ -25,6 +26,7 @@ mod task;
 use crate::fs::{open_file, OpenFlags};
 use alloc::sync::Arc;
 pub use context::TaskContext;
+pub use info::TaskInfo;
 use lazy_static::*;
 pub use manager::{fetch_task, TaskManager};
 use switch::__switch;

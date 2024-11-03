@@ -54,6 +54,7 @@ const SYSCALL_TASK_INFO: usize = 410;
 mod fs;
 mod process;
 
+use crate::task::current_task;
 use fs::*;
 use process::*;
 
@@ -61,6 +62,16 @@ use crate::fs::Stat;
 
 /// handle syscall exception with `syscall_id` and other arguments
 pub fn syscall(syscall_id: usize, args: [usize; 4]) -> isize {
+    // Record the syscall time of the current task.
+    // NOTE that the syscall time recording must be before the actual
+    // syscall operation as SYSCALL_TASK_INFO itself is calculated as
+    // a syscall as well.
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    task_inner.task_info.syscall_times[syscall_id] += 1;
+    drop(task_inner);
+    drop(task);
+    
     match syscall_id {
         SYSCALL_OPEN => sys_open(args[1] as *const u8, args[2] as u32),
         SYSCALL_CLOSE => sys_close(args[0]),

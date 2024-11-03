@@ -1,9 +1,9 @@
 //! Types related to task management & Functions for completely changing TCB
-use super::TaskContext;
+use super::{TaskContext, TaskInfo};
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 use crate::config::TRAP_CONTEXT_BASE;
 use crate::fs::{File, Stdin, Stdout};
-use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::mm::{MemorySet, PhysPageNum, VirtAddr, VirtPageNum, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
@@ -52,6 +52,9 @@ pub struct TaskControlBlockInner {
     /// Maintain the execution status of the current process
     pub task_status: TaskStatus,
 
+    /// The task recorded information
+    pub task_info: TaskInfo,
+
     /// Application address space
     pub memory_set: MemorySet,
 
@@ -71,6 +74,10 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// `mmap` records used to manage mapped virtual pages by this task
+    /// through syscalls.
+    pub mmap_records: Vec<(VirtPageNum, usize)>
 }
 
 impl TaskControlBlockInner {
@@ -99,7 +106,7 @@ impl TaskControlBlockInner {
 impl TaskControlBlock {
     /// Create a new process
     ///
-    /// At present, it is only used for the creation of initproc
+    /// At present, it is only used for the creation of initproc and spawning of subprocesses.
     pub fn new(elf_data: &[u8]) -> Self {
         // memory_set with elf program headers/trampoline/trap context/user stack
         let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
@@ -135,6 +142,8 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    task_info: TaskInfo::zero_init(),
+                    mmap_records: Vec::new()
                 })
             },
         };
@@ -216,6 +225,8 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    task_info: TaskInfo::zero_init(),
+                    mmap_records: Vec::new()
                 })
             },
         });
@@ -229,6 +240,24 @@ impl TaskControlBlock {
         task_control_block
         // **** release child PCB
         // ---- release parent PCB
+    }
+
+    /// Spawn a child process with the given elf data.
+    pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
+        // Create the child process.
+        let child = Self::new(elf_data);
+        // Set the parent process for the child process.
+        let mut inner = self.inner_exclusive_access();
+        inner.parent = Some(Arc::downgrade(self));
+        drop(inner);
+        // Wrap the process into Arc.
+        let child = Arc::new(child);
+        // Mark the child process as one of the children of self.
+        let mut inner = self.inner_exclusive_access();
+        inner.children.push(Arc::clone(&child));
+        drop(inner);
+        
+        child
     }
 
     /// get pid of process

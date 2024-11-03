@@ -8,7 +8,9 @@ use super::__switch;
 use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_us;
 use crate::trap::TrapContext;
+use crate::config::BIG_STRIDE;
 use alloc::sync::Arc;
 use lazy_static::*;
 
@@ -61,6 +63,20 @@ pub fn run_tasks() {
             let mut task_inner = task.inner_exclusive_access();
             let next_task_cx_ptr = &task_inner.task_cx as *const TaskContext;
             task_inner.task_status = TaskStatus::Running;
+
+            // Update the stride of the task.
+            // It's of sure that the priority is bigger than or equal to 2.
+            assert!(
+                task_inner.task_info.priority >= 2,
+                "The priority of tasks must be bigger than or equal to 2."
+            );
+            let pass = BIG_STRIDE / task_inner.task_info.priority;
+            task_inner.task_info.stride += pass;
+            // Record the start time of the next task if not recorded (i.e. not started) yet.
+            if let None = task_inner.task_info.start_time {
+                task_inner.task_info.start_time = Some(get_time_us());
+            }
+            
             // release coming task_inner manually
             drop(task_inner);
             // release coming task TCB manually
