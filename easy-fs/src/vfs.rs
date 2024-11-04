@@ -138,6 +138,103 @@ impl Inode {
         )))
         // release efs lock automatically by compiler
     }
+    /// Create a hard link to a target inode under current inode.
+    /// Return the file inode (rather than dirent inode) of the target inode.
+    pub fn create_hard_link(&self, new_name: &str, target_name: &str) -> Option<Arc<Inode>> {
+        let target_inode = self.find(target_name);
+        if target_inode.is_none() {
+            // The target inode doesn't exist. Unable to create the hard link.
+            return None;
+        }
+        let target_inode = target_inode.unwrap();
+        // Get the inode id of the target inode.
+        let target_inode_id = self.read_disk_inode(|disk_inode| {
+            self.find_inode_id(new_name, disk_inode)
+        }).unwrap();
+
+        let mut fs = self.fs.lock();
+        self.modify_disk_inode(|root_inode| {
+            // append file in the dirent
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;
+            let new_size = (file_count + 1) * DIRENT_SZ;
+            // increase size
+            self.increase_size(new_size as u32, root_inode, &mut fs);
+            // write dirent
+            let dirent = DirEntry::new(new_name, target_inode_id);
+            root_inode.write_at(
+                file_count * DIRENT_SZ,
+                dirent.as_bytes(),
+                &self.block_device,
+            );
+        });
+
+        block_cache_sync_all();
+        Some(target_inode)
+    }
+    /// Remove a hard link under the current inode.
+    pub fn remove_hard_link(&self, name: &str) -> bool {
+        self.modify_disk_inode(|disk_inode| {
+            // Ensure current inode is dir at first.
+            assert!(disk_inode.is_dir());
+
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let mut dirent = DirEntry::empty();
+            let mut idx = None;
+            for i in 0..file_count {
+                assert_eq!(
+                    disk_inode.read_at(DIRENT_SZ * i, dirent.as_bytes_mut(), &self.block_device,),
+                    DIRENT_SZ,
+                );
+                if dirent.name() == name {
+                    idx = Some(i);
+                }
+            }
+            if idx.is_none() {
+                return false;
+            }
+
+            // Empty the hard link dirent with zeros.
+            let zeros = [0; DIRENT_SZ];
+            disk_inode.write_at(
+                idx.unwrap() * DIRENT_SZ,
+                zeros.as_slice(),
+                &self.block_device,
+            );
+
+            true
+        })
+    }
+    /// Get the numbers of hard links to the target inode.
+    /// Return None if the target inode does not exist.
+    pub fn hard_link_count(&self, name: &str) -> Option<usize> {
+        let inode_id = self.read_disk_inode(|root_inode: &DiskInode| {
+            // assert it is a directory
+            assert!(root_inode.is_dir());
+            // has the file been created?
+            self.find_inode_id(name, root_inode)
+        });
+        if inode_id.is_none() {
+            return None;
+        }
+        let inode_id = inode_id.unwrap();
+        let mut count = 1;
+
+        self.read_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let mut dirent = DirEntry::empty();
+            for i in 0..file_count {
+                assert_eq!(
+                    disk_inode.read_at(DIRENT_SZ * i, dirent.as_bytes_mut(), &self.block_device,),
+                    DIRENT_SZ,
+                );
+                if dirent.inode_id() == inode_id {
+                    count += 1;
+                }
+            }
+        });
+        
+        Some(count)
+    }
     /// List inodes under current inode
     pub fn ls(&self) -> Vec<String> {
         let _fs = self.fs.lock();

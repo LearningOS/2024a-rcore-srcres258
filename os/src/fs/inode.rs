@@ -4,7 +4,7 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
-use super::File;
+use super::{File, Stat};
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
@@ -122,6 +122,29 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
             Arc::new(OSInode::new(readable, writable, inode))
         })
     }
+}
+
+/// Create a hard link in the filesystem.
+/// Return true if the link was successfully created, false otherwise.
+pub fn create_hard_link(link_name: &str, target_name: &str) -> bool {
+    ROOT_INODE.create_hard_link(link_name, target_name).is_some()
+}
+
+/// Remove a hard link in the filesystem.
+pub fn remove_hard_link(link_name: &str) -> bool {
+    ROOT_INODE.remove_hard_link(link_name)
+}
+
+/// Get the number of hard links of the target file in the filesystem.
+pub fn hard_link_count(name: &str) -> Option<usize> {
+    ROOT_INODE.hard_link_count(name)
+}
+
+
+/// Get the stat of the given file.
+/// Return None if the file does not exist.
+pub fn file_stats(name: &str) -> Option<Stat> {
+    todo!()
 }
 
 impl File for OSInode {
