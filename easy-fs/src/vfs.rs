@@ -149,7 +149,7 @@ impl Inode {
         let target_inode = target_inode.unwrap();
         // Get the inode id of the target inode.
         let target_inode_id = self.read_disk_inode(|disk_inode| {
-            self.find_inode_id(new_name, disk_inode)
+            self.find_inode_id(target_name, disk_inode)
         }).unwrap();
 
         let mut fs = self.fs.lock();
@@ -204,6 +204,83 @@ impl Inode {
             true
         })
     }
+    /// Get the inode id of the given hard link under this dir inode.
+    /// Return None if this inode is not a dir inode or the given hard
+    /// link does not exist under this dir inode.
+    pub fn hard_link_inode_id(&self, name: &str) -> Option<u32> {
+        self.read_disk_inode(|root_inode: &DiskInode| {
+            // is self a dir inode?
+            if root_inode.is_dir() {
+                // has the file been created?
+                self.find_inode_id(name, root_inode)
+            } else {
+                None
+            }
+        })
+    }
+    /// Return if this inode represents a file.
+    pub fn is_file(&self) -> bool {
+        self.read_disk_inode(|root_inode: &DiskInode| {
+            root_inode.is_file()
+        })
+    }
+    /// Return if this inode represents a file.
+    pub fn is_dir(&self) -> bool {
+        self.read_disk_inode(|root_inode: &DiskInode| {
+            root_inode.is_dir()
+        })
+    }
+    /// Query hard link names that link to the given file inode.
+    /// Empty Vec is returned if nothing was found.
+    pub fn query_hard_link_names(&self, inode: &Arc<Self>) -> Vec<String> {
+        let mut result = Vec::new();
+        let fs = self.fs.lock();
+
+        // Walk through dir entries under this dir inode.
+        self.read_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let mut dirent = DirEntry::empty();
+            for i in 0..file_count {
+                assert_eq!(
+                    disk_inode.read_at(DIRENT_SZ * i, dirent.as_bytes_mut(), &self.block_device,),
+                    DIRENT_SZ,
+                );
+
+                let inode_id = dirent.inode_id();
+                let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
+                if block_id == inode.block_id as u32 && block_offset == inode.block_offset {
+                    result.push(String::from(dirent.name()));
+                }
+            }
+        });
+
+        result
+    }
+    /// Query inode id of the given inode under this dir inode.
+    /// Return None if the given file inode is not under this dir inode.
+    pub fn query_inode_id(&self, inode: &Arc<Self>) -> Option<u32> {
+        let fs = self.fs.lock();
+
+        // Walk through dir entries under this dir inode.
+        self.read_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let mut dirent = DirEntry::empty();
+            for i in 0..file_count {
+                assert_eq!(
+                    disk_inode.read_at(DIRENT_SZ * i, dirent.as_bytes_mut(), &self.block_device,),
+                    DIRENT_SZ,
+                );
+
+                let inode_id = dirent.inode_id();
+                let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
+                if block_id == inode.block_id as u32 && block_offset == inode.block_offset {
+                    return Some(inode_id);
+                }
+            }
+
+            None
+        })
+    }
     /// Get the numbers of hard links to the target inode.
     /// Return None if the target inode does not exist.
     pub fn hard_link_count(&self, name: &str) -> Option<usize> {
@@ -219,6 +296,7 @@ impl Inode {
         let inode_id = inode_id.unwrap();
         let mut count = 1;
 
+        // Walk through dir entries under this dir inode.
         self.read_disk_inode(|disk_inode| {
             let file_count = (disk_inode.size as usize) / DIRENT_SZ;
             let mut dirent = DirEntry::empty();

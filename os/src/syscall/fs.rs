@@ -1,13 +1,8 @@
 //! File and filesystem-related syscalls
-use crate::fs::{
-    open_file,
-    create_hard_link,
-    remove_hard_link,
-    hard_link_count,
-    OpenFlags,
-    Stat
-};
-use crate::mm::{translated_byte_buffer, translated_str, UserBuffer};
+
+use alloc::sync::Arc;
+use crate::fs::{open_file, create_hard_link, remove_hard_link, file_stats, OpenFlags, Stat, StatMode};
+use crate::mm::{copy_data_to_user, translated_byte_buffer, translated_str, UserBuffer};
 use crate::task::{current_task, current_user_token};
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
@@ -83,13 +78,45 @@ pub fn sys_close(fd: usize) -> isize {
 }
 
 /// YOUR JOB: Implement fstat.
-pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
+pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
     trace!(
         "kernel:pid[{}] sys_fstat",
         current_task().unwrap().pid.0
     );
-
     
+    let st_kernel = match fd {
+        // 0 -> stdin
+        // 1 -> stdout
+        // 2 -> stderr (same as stdout yet)
+        0 | 1 | 2 => {
+            Stat {
+                dev: 0,
+                ino: 0,
+                mode: StatMode::FILE,
+                nlink: 0,
+                pad: [0; 7],
+            }
+        }
+        _ => {
+            let task = current_task().unwrap();
+            let inner = task.inner_exclusive_access();
+            let file = inner.fd_table[fd].as_ref().map(|f| Arc::clone(&f));
+            drop(inner);
+            drop(task);
+            
+            if file.is_none() {
+                return -1;
+            }
+            let inode = file.unwrap().inode().unwrap();
+            let stat = file_stats(inode);
+            if stat.is_none() {
+                return -1;
+            }
+            stat.unwrap()
+        }
+    };
+    let token = current_user_token();
+    copy_data_to_user(token, st, &st_kernel);
 
     0
 }
