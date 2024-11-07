@@ -4,6 +4,7 @@ mod condvar;
 mod mutex;
 mod semaphore;
 mod up;
+mod resource;
 
 pub use condvar::Condvar;
 pub use mutex::{Mutex, MutexBlocking, MutexSpin};
