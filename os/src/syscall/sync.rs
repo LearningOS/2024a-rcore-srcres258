@@ -71,10 +71,9 @@ pub fn sys_mutex_lock(mutex_id: usize) -> isize {
     let process = current_process();
     let process_inner = process.inner_exclusive_access();
     let mutex = Arc::clone(process_inner.mutex_list[mutex_id].as_ref().unwrap());
-    let deadlock_detect = process_inner.deadlock_detect;
     drop(process_inner);
     drop(process);
-    let result = mutex.lock(!deadlock_detect);
+    let result = mutex.lock();
     match result {
         OperationResult::Done => 0,
         OperationResult::DeadlockDetected => -0xDEAD
@@ -115,7 +114,7 @@ pub fn sys_semaphore_create(res_count: usize) -> isize {
             .tid
     );
     let process = current_process();
-    let mut process_inner = process.inner_exclusive_access();
+    let process_inner = process.inner_exclusive_access();
     let id = if let Some(id) = process_inner
         .semaphore_list
         .iter()
@@ -123,12 +122,18 @@ pub fn sys_semaphore_create(res_count: usize) -> isize {
         .find(|(_, item)| item.is_none())
         .map(|(id, _)| id)
     {
-        process_inner.semaphore_list[id] = Some(Arc::new(Semaphore::new(res_count)));
+        drop(process_inner);
+        let sem = Semaphore::new(res_count);
+        let mut process_inner = process.inner_exclusive_access();
+        process_inner.semaphore_list[id] = Some(Arc::new(sem));
         id
     } else {
+        drop(process_inner);
+        let sem = Semaphore::new(res_count);
+        let mut process_inner = process.inner_exclusive_access();
         process_inner
             .semaphore_list
-            .push(Some(Arc::new(Semaphore::new(res_count))));
+            .push(Some(Arc::new(sem)));
         process_inner.semaphore_list.len() - 1
     };
     id as isize
@@ -169,9 +174,8 @@ pub fn sys_semaphore_down(sem_id: usize) -> isize {
     let process = current_process();
     let process_inner = process.inner_exclusive_access();
     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
-    let deadlock_detect = process_inner.deadlock_detect;
     drop(process_inner);
-    let result = sem.down(!deadlock_detect);
+    let result = sem.down();
     match result {
         OperationResult::Done => 0,
         OperationResult::DeadlockDetected => -0xDEAD
@@ -246,9 +250,8 @@ pub fn sys_condvar_wait(condvar_id: usize, mutex_id: usize) -> isize {
     let process_inner = process.inner_exclusive_access();
     let condvar = Arc::clone(process_inner.condvar_list[condvar_id].as_ref().unwrap());
     let mutex = Arc::clone(process_inner.mutex_list[mutex_id].as_ref().unwrap());
-    let deadlock_detect = process_inner.deadlock_detect;
     drop(process_inner);
-    let result = condvar.wait(mutex, !deadlock_detect);
+    let result = condvar.wait(mutex);
     match result {
         OperationResult::Done => 0,
         OperationResult::DeadlockDetected => -0xDEAD

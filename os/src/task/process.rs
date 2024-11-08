@@ -2,7 +2,7 @@
 
 use super::id::RecycleAllocator;
 use super::manager::insert_into_pid2process;
-use super::TaskControlBlock;
+use super::{ProcessResource, TaskControlBlock};
 use super::{add_task, SignalFlags};
 use super::{pid_alloc, PidHandle};
 use crate::fs::{File, Stdin, Stdout};
@@ -50,7 +50,11 @@ pub struct ProcessControlBlockInner {
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
     /// whether deadlock detection is enabled
-    pub deadlock_detect: bool
+    pub deadlock_detect: bool,
+    /// process resource
+    pub resource: ProcessResource,
+    /// process resource id allocator
+    pub resource_id_allocator: RecycleAllocator
 }
 
 impl ProcessControlBlockInner {
@@ -121,7 +125,9 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
-                    deadlock_detect: false
+                    deadlock_detect: false,
+                    resource: ProcessResource::new(),
+                    resource_id_allocator: RecycleAllocator::new()
                 })
             },
         });
@@ -248,7 +254,9 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
-                    deadlock_detect: false
+                    deadlock_detect: false,
+                    resource: ProcessResource::new(),
+                    resource_id_allocator: RecycleAllocator::new()
                 })
             },
         });

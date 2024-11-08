@@ -4,16 +4,17 @@ mod condvar;
 mod mutex;
 mod semaphore;
 mod up;
-mod resource;
 
 pub use condvar::Condvar;
 pub use mutex::{Mutex, MutexBlocking, MutexSpin};
 pub use semaphore::Semaphore;
 pub use up::UPSafeCell;
-pub use resource::{
-    ResourceProducerHandle,
-    ResourceConsumerHandle,
-    ResourceConsumerHandleCollection,
-    OperationResult,
-    detect_deadlock
-};
+
+/// Operation result enum for syncing or locking operations
+/// (acquisition of resources).
+pub enum OperationResult {
+    /// The operation was done without faults.
+    Done,
+    /// Deadlock is detected and the operation is denied.
+    DeadlockDetected
+}

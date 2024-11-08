@@ -18,6 +18,7 @@ mod signal;
 mod switch;
 #[allow(clippy::module_inception)]
 mod task;
+mod resource;
 
 use self::id::TaskUserRes;
 use crate::fs::{open_file, OpenFlags};
@@ -38,6 +39,7 @@ pub use processor::{
 };
 pub use signal::SignalFlags;
 pub use task::{TaskControlBlock, TaskStatus};
+pub use resource::ProcessResource;
 
 /// Make current task suspended and switch to the next task
 pub fn suspend_current_and_run_next() {

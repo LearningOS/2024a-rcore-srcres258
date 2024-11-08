@@ -3,7 +3,7 @@
 use super::ProcessControlBlock;
 use crate::config::{KERNEL_STACK_SIZE, PAGE_SIZE, TRAMPOLINE, TRAP_CONTEXT_BASE, USER_STACK_SIZE};
 use crate::mm::{MapPermission, PhysPageNum, VirtAddr, KERNEL_SPACE};
-use crate::sync::{ResourceConsumerHandleCollection, UPSafeCell};
+use crate::sync::UPSafeCell;
 use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
@@ -133,9 +133,7 @@ pub struct TaskUserRes {
     /// user stack base
     pub ustack_base: usize,
     /// process belongs to
-    pub process: Weak<ProcessControlBlock>,
-    /// Resource handle collection of this thread.
-    pub resource_handles: ResourceConsumerHandleCollection
+    pub process: Weak<ProcessControlBlock>
 }
 /// Return the bottom addr (low addr) of the trap context for a task
 fn trap_cx_bottom_from_tid(tid: usize) -> usize {
@@ -157,8 +155,7 @@ impl TaskUserRes {
         let task_user_res = Self {
             tid,
             ustack_base,
-            process: Arc::downgrade(&process),
-            resource_handles: ResourceConsumerHandleCollection::new(tid)
+            process: Arc::downgrade(&process)
         };
         if alloc_user_res {
             task_user_res.alloc_user_res();

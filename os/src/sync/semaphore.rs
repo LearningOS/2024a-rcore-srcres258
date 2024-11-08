@@ -1,92 +1,93 @@
 //! Semaphore
 
-use crate::sync::{detect_deadlock, OperationResult, ResourceProducerHandle, UPSafeCell};
-use crate::task::{block_current_and_run_next, current_task, wakeup_task, TaskControlBlock};
+use crate::sync::{OperationResult, UPSafeCell};
+use crate::task::{block_current_and_run_next, current_process, current_task, wakeup_task, TaskControlBlock};
 use alloc::{collections::VecDeque, sync::Arc};
 
 /// semaphore structure
 pub struct Semaphore {
+    rid: usize,
     /// semaphore inner
     pub inner: UPSafeCell<SemaphoreInner>,
 }
 
 pub struct SemaphoreInner {
     pub count: isize,
-    pub wait_queue: VecDeque<Arc<TaskControlBlock>>,
-    handle: Arc<ResourceProducerHandle>
+    pub wait_queue: VecDeque<Arc<TaskControlBlock>>
 }
 
 impl Semaphore {
     /// Create a new semaphore
     pub fn new(res_count: usize) -> Self {
         trace!("kernel: Semaphore::new");
+        
+        // Allocate a resource id for self.
+        let process = current_process();
+        let mut inner = process.inner_exclusive_access();
+        let rid = inner.resource_id_allocator.alloc();
+        // Set the initial resource amount.
+        inner.resource.available[rid] = res_count;
+        drop(inner);
+        
         Self {
+            rid,
             inner: unsafe {
                 UPSafeCell::new(SemaphoreInner {
                     count: res_count as isize,
-                    wait_queue: VecDeque::new(),
-                    handle: ResourceProducerHandle::new(res_count)
+                    wait_queue: VecDeque::new()
                 })
             },
         }
     }
 
     fn submit_need(&self) {
-        let inner = self.inner.exclusive_access();
-
-        // Submit need for the semaphore on current tid.
-        let rid = inner.handle.rid();
-        let task = current_task().unwrap();
-        task.inner_exclusive_access()
+        let process = current_process();
+        let mut inner = process.inner_exclusive_access();
+        let tid = current_task().unwrap()
+            .inner_exclusive_access()
             .res
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .resource_handles
-            .submit_need(rid, 1);
+            .tid;
+        inner.resource.need[tid][self.rid] += 1;
     }
 
     fn remove_need(&self) {
-        let inner = self.inner.exclusive_access();
-
-        // Remove need for the semaphore on current tid.
-        let rid = inner.handle.rid();
-        let task = current_task().unwrap();
-        task.inner_exclusive_access()
+        let process = current_process();
+        let mut inner = process.inner_exclusive_access();
+        let tid = current_task().unwrap()
+            .inner_exclusive_access()
             .res
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .resource_handles
-            .remove_need(rid, 1);
+            .tid;
+        inner.resource.need[tid][self.rid] -= 1;
     }
 
-    fn alloc_resource(&self, force: bool) -> bool {
-        let inner = self.inner.exclusive_access();
-
-        let rid = inner.handle.rid();
-        let task = current_task().unwrap();
-        let result = task.inner_exclusive_access()
+    fn alloc_resource(&self) {
+        let process = current_process();
+        let mut inner = process.inner_exclusive_access();
+        let tid = current_task().unwrap()
+            .inner_exclusive_access()
             .res
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .resource_handles
-            .allocate(rid, 1);
-        drop(task);
-
-        result || force
+            .tid;
+        inner.resource.allocation[tid][self.rid] += 1;
+        inner.resource.available[self.rid] -= 1;
     }
     
     fn dealloc_resource(&self) {
-        let inner = self.inner.exclusive_access();
-
-        let rid = inner.handle.rid();
-        let task = current_task().unwrap();
-        task.inner_exclusive_access()
+        let process = current_process();
+        let mut inner = process.inner_exclusive_access();
+        let tid = current_task().unwrap()
+            .inner_exclusive_access()
             .res
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .resource_handles
-            .deallocate(rid, 1);
-        drop(task);
+            .tid;
+        inner.resource.allocation[tid][self.rid] -= 1;
+        inner.resource.available[self.rid] += 1;
     }
 
     /// up operation of semaphore
@@ -106,17 +107,23 @@ impl Semaphore {
     }
 
     /// down operation of semaphore
-    pub fn down(&self, force: bool) -> OperationResult {
+    pub fn down(&self) -> OperationResult {
         trace!("kernel: Semaphore::down");
 
+        // Get whether deadlock detection is enabled.
+        let deadlock_detect = current_process().inner_exclusive_access().deadlock_detect;
         // Submit need of current tid on current rid.
         self.submit_need();
         // Detect deadlock.
-        if detect_deadlock() && !force {
+        let process = current_process();
+        let inner = process.inner_exclusive_access();
+        if inner.resource.detect_deadlock() && deadlock_detect {
             // Deadlock is detected and the operation is not forced.
-            // Failed to make semaphore down.
+            // Failed to lock the mutex.
             return OperationResult::DeadlockDetected;
         }
+        drop(inner);
+        drop(process);
         
         let mut inner = self.inner.exclusive_access();
         inner.count -= 1;
@@ -124,13 +131,11 @@ impl Semaphore {
             inner.wait_queue.push_back(current_task().unwrap());
             drop(inner);
             block_current_and_run_next();
-        } else {
-            drop(inner);
-        } // inner has been completely dropped here.
-
+        }
+        
         // Need is satisfied. Remove need and alloc resource.
         self.remove_need();
-        self.alloc_resource(true);
+        self.alloc_resource();
 
         OperationResult::Done
     }

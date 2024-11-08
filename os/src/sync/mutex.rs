@@ -1,7 +1,7 @@
 //! Mutex (spin-like and blocking(sleep))
 
-use super::{detect_deadlock, OperationResult, ResourceProducerHandle, UPSafeCell};
-use crate::task::TaskControlBlock;
+use super::{OperationResult, UPSafeCell};
+use crate::task::{current_process, TaskControlBlock};
 use crate::task::{block_current_and_run_next, suspend_current_and_run_next};
 use crate::task::{current_task, wakeup_task};
 use alloc::{collections::VecDeque, sync::Arc};
@@ -9,7 +9,7 @@ use alloc::{collections::VecDeque, sync::Arc};
 /// Mutex trait
 pub trait Mutex: Sync + Send {
     /// Lock the mutex
-    fn lock(&self, force: bool) -> OperationResult;
+    fn lock(&self) -> OperationResult;
     /// Unlock the mutex
     fn unlock(&self);
 }
@@ -17,89 +17,96 @@ pub trait Mutex: Sync + Send {
 /// Spinlock Mutex struct
 pub struct MutexSpin {
     locked: UPSafeCell<bool>,
-    handle: UPSafeCell<Arc<ResourceProducerHandle>>
+    rid: usize
 }
 
 impl MutexSpin {
     /// Create a new spinlock mutex
     pub fn new() -> Self {
+        // Allocate a resource id for self.
+        let process = current_process();
+        let mut inner = process.inner_exclusive_access();
+        let rid = inner.resource_id_allocator.alloc();
+        // Set the initial resource amount.
+        inner.resource.available[rid] = 1;
+        drop(inner);
+        
         Self {
             locked: unsafe { UPSafeCell::new(false) },
-            handle: unsafe { UPSafeCell::new(ResourceProducerHandle::new(1)) }
+            rid
         }
     }
 
     fn submit_need(&self) {
-        // Submit need for the mutex on current tid.
-        let handle = self.handle.exclusive_access();
-        let rid = handle.rid();
-        let task = current_task().unwrap();
-        task.inner_exclusive_access()
+        let process = current_process();
+        let mut inner = process.inner_exclusive_access();
+        let tid = current_task().unwrap()
+            .inner_exclusive_access()
             .res
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .resource_handles
-            .submit_need(rid, 1);
+            .tid;
+        inner.resource.need[tid][self.rid] += 1;
     }
 
     fn remove_need(&self) {
-        // Remove need for the mutex on current tid.
-        let handle = self.handle.exclusive_access();
-        let rid = handle.rid();
-        let task = current_task().unwrap();
-        task.inner_exclusive_access()
+        let process = current_process();
+        let mut inner = process.inner_exclusive_access();
+        let tid = current_task().unwrap()
+            .inner_exclusive_access()
             .res
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .resource_handles
-            .remove_need(rid, 1);
+            .tid;
+        inner.resource.need[tid][self.rid] -= 1;
     }
 
-    /// If deadlock is detected, return false.
-    fn alloc_resource(&self, force: bool) -> bool {
-        let handle = self.handle.exclusive_access();
-        let rid = handle.rid();
-        drop(handle);
-        let task = current_task().unwrap();
-        let result = task.inner_exclusive_access()
+    fn alloc_resource(&self) {
+        let process = current_process();
+        let mut inner = process.inner_exclusive_access();
+        let tid = current_task().unwrap()
+            .inner_exclusive_access()
             .res
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .resource_handles
-            .allocate(rid, 1);
-        drop(task);
-
-        result || force
+            .tid;
+        inner.resource.allocation[tid][self.rid] += 1;
+        inner.resource.available[self.rid] -= 1;
     }
 
     fn dealloc_resource(&self) {
-        let handle = self.handle.exclusive_access();
-        let rid = handle.rid();
-        drop(handle);
-        let task = current_task().unwrap();
-        task.inner_exclusive_access()
+        let process = current_process();
+        let mut inner = process.inner_exclusive_access();
+        let tid = current_task().unwrap()
+            .inner_exclusive_access()
             .res
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .resource_handles
-            .deallocate(rid, 1);
-        drop(task);
+            .tid;
+        inner.resource.allocation[tid][self.rid] -= 1;
+        inner.resource.available[self.rid] += 1;
     }
 }
 
 impl Mutex for MutexSpin {
     /// Lock the spinlock mutex
-    fn lock(&self, force: bool) -> OperationResult {
+    fn lock(&self) -> OperationResult {
         trace!("kernel: MutexSpin::lock");
         loop {
+            // Get whether deadlock detection is enabled.
+            let deadlock_detect = current_process().inner_exclusive_access().deadlock_detect;
             // Submit need of current tid on current rid.
             self.submit_need();
             // Detect deadlock.
-            if detect_deadlock() && !force {
+            let process = current_process();
+            let inner = process.inner_exclusive_access();
+            if inner.resource.detect_deadlock() && deadlock_detect {
                 // Deadlock is detected and the operation is not forced.
                 // Failed to lock the mutex.
                 return OperationResult::DeadlockDetected;
             }
+            drop(inner);
+            drop(process);
 
             let mut locked = self.locked.exclusive_access();
             if *locked {
@@ -111,7 +118,7 @@ impl Mutex for MutexSpin {
 
                 // Need is satisfied. Remove need and alloc resource.
                 self.remove_need();
-                self.alloc_resource(true);
+                self.alloc_resource();
 
                 return OperationResult::Done;
             }
@@ -131,106 +138,109 @@ impl Mutex for MutexSpin {
 
 /// Blocking Mutex struct
 pub struct MutexBlocking {
+    rid: usize,
     inner: UPSafeCell<MutexBlockingInner>,
 }
 
 pub struct MutexBlockingInner {
     locked: bool,
-    wait_queue: VecDeque<Arc<TaskControlBlock>>,
-    handle: Arc<ResourceProducerHandle>
+    wait_queue: VecDeque<Arc<TaskControlBlock>>
 }
 
 impl MutexBlocking {
     /// Create a new blocking mutex
     pub fn new() -> Self {
         trace!("kernel: MutexBlocking::new");
+
+        // Allocate a resource id for self.
+        let process = current_process();
+        let mut inner = process.inner_exclusive_access();
+        let rid = inner.resource_id_allocator.alloc();
+        // Set the initial resource amount.
+        inner.resource.available[rid] = 1;
+        drop(inner);
+        
         Self {
+            rid,
             inner: unsafe {
                 UPSafeCell::new(MutexBlockingInner {
                     locked: false,
-                    wait_queue: VecDeque::new(),
-                    handle: ResourceProducerHandle::new(1)
+                    wait_queue: VecDeque::new()
                 })
             },
         }
     }
 
     fn submit_need(&self) {
-        let mutex_inner = self.inner.exclusive_access();
-
-        // Submit need for the mutex on current tid.
-        let rid = mutex_inner.handle.rid();
-        let task = current_task().unwrap();
-        task.inner_exclusive_access()
+        let process = current_process();
+        let mut inner = process.inner_exclusive_access();
+        let tid = current_task().unwrap()
+            .inner_exclusive_access()
             .res
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .resource_handles
-            .submit_need(rid, 1);
-        drop(task);
+            .tid;
+        inner.resource.need[tid][self.rid] += 1;
     }
 
     fn remove_need(&self) {
-        let mutex_inner = self.inner.exclusive_access();
-
-        // Remove need for the mutex on current tid.
-        let rid = mutex_inner.handle.rid();
-        let task = current_task().unwrap();
-        task.inner_exclusive_access()
+        let process = current_process();
+        let mut inner = process.inner_exclusive_access();
+        let tid = current_task().unwrap()
+            .inner_exclusive_access()
             .res
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .resource_handles
-            .remove_need(rid, 1);
-        drop(task);
+            .tid;
+        inner.resource.need[tid][self.rid] -= 1;
     }
 
-    /// If deadlock is detected, return false.
-    fn alloc_resource(&self, force: bool) -> bool {
-        let mutex_inner = self.inner.exclusive_access();
-
-        // Allocate mutex resource for the current thread.
-        let rid = mutex_inner.handle.rid();
-        let task = current_task().unwrap();
-        let result = task.inner_exclusive_access()
+    fn alloc_resource(&self) {
+        let process = current_process();
+        let mut inner = process.inner_exclusive_access();
+        let tid = current_task().unwrap()
+            .inner_exclusive_access()
             .res
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .resource_handles
-            .allocate(rid, 1);
-        drop(task);
-
-        result || force
+            .tid;
+        inner.resource.allocation[tid][self.rid] += 1;
+        inner.resource.available[self.rid] -= 1;
     }
 
     fn dealloc_resource(&self) {
-        let mutex_inner = self.inner.exclusive_access();
-
-        let rid = mutex_inner.handle.rid();
-        let task = current_task().unwrap();
-        task.inner_exclusive_access()
+        let process = current_process();
+        let mut inner = process.inner_exclusive_access();
+        let tid = current_task().unwrap()
+            .inner_exclusive_access()
             .res
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .resource_handles
-            .deallocate(rid, 1);
-        drop(task);
+            .tid;
+        inner.resource.allocation[tid][self.rid] -= 1;
+        inner.resource.available[self.rid] += 1;
     }
 }
 
 impl Mutex for MutexBlocking {
     /// lock the blocking mutex
-    fn lock(&self, force: bool) -> OperationResult {
+    fn lock(&self) -> OperationResult {
         trace!("kernel: MutexBlocking::lock");
 
+        // Get whether deadlock detection is enabled.
+        let deadlock_detect = current_process().inner_exclusive_access().deadlock_detect;
         // Submit need of current tid on current rid.
         self.submit_need();
         // Detect deadlock.
-        if detect_deadlock() && !force {
+        let process = current_process();
+        let inner = process.inner_exclusive_access();
+        if inner.resource.detect_deadlock() && deadlock_detect {
             // Deadlock is detected and the operation is not forced.
             // Failed to lock the mutex.
             return OperationResult::DeadlockDetected;
         }
+        drop(inner);
+        drop(process);
 
         let mut mutex_inner = self.inner.exclusive_access();
         if mutex_inner.locked {
@@ -239,12 +249,11 @@ impl Mutex for MutexBlocking {
             block_current_and_run_next();
         } else {
             mutex_inner.locked = true;
-            drop(mutex_inner);
-        } // mutex_inner has been completely dropped here.
+        }
 
         // Need is satisfied. Remove need and alloc resource.
         self.remove_need();
-        self.alloc_resource(true);
+        self.alloc_resource();
 
         OperationResult::Done
     }
@@ -258,9 +267,7 @@ impl Mutex for MutexBlocking {
             wakeup_task(waking_task);
         } else {
             // Deallocate mutex resource for the current thread.
-            drop(mutex_inner);
             self.dealloc_resource();
-            let mut mutex_inner = self.inner.exclusive_access();
             
             mutex_inner.locked = false;
         }
