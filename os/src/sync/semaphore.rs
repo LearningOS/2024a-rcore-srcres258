@@ -1,6 +1,6 @@
 //! Semaphore
 
-use crate::sync::{ResourceProducerHandle, UPSafeCell};
+use crate::sync::{OperationResult, ResourceProducerHandle, UPSafeCell};
 use crate::task::{block_current_and_run_next, current_task, wakeup_task, TaskControlBlock};
 use alloc::{collections::VecDeque, sync::Arc};
 
@@ -31,12 +31,25 @@ impl Semaphore {
         }
     }
 
-    /// up operation of semaphore
-    pub fn up(&self) {
-        trace!("kernel: Semaphore::up");
-        let mut inner = self.inner.exclusive_access();
+    fn alloc_resource(&self, force: bool) -> bool {
+        let inner = self.inner.exclusive_access();
 
-        // Deallocate semaphore resource for the current thread.
+        let rid = inner.handle.rid();
+        let task = current_task().unwrap();
+        let result = task.inner_exclusive_access()
+            .res
+            .as_mut()
+            .unwrap()
+            .resource_handles
+            .allocate(rid, 1);
+        drop(task);
+
+        result || force
+    }
+    
+    fn dealloc_resource(&self) {
+        let inner = self.inner.exclusive_access();
+
         let rid = inner.handle.rid();
         let task = current_task().unwrap();
         task.inner_exclusive_access()
@@ -46,7 +59,16 @@ impl Semaphore {
             .resource_handles
             .deallocate(rid, 1);
         drop(task);
+    }
+
+    /// up operation of semaphore
+    pub fn up(&self) {
+        trace!("kernel: Semaphore::up");
         
+        // Deallocate semaphore resource for the current thread.
+        self.dealloc_resource();
+        
+        let mut inner = self.inner.exclusive_access();
         inner.count += 1;
         if inner.count <= 0 {
             if let Some(task) = inner.wait_queue.pop_front() {
@@ -56,27 +78,27 @@ impl Semaphore {
     }
 
     /// down operation of semaphore
-    pub fn down(&self) {
+    pub fn down(&self, force: bool) -> OperationResult {
         trace!("kernel: Semaphore::down");
+
+        // Allocate semaphore resource for the current thread.
+        if !self.alloc_resource(force) {
+            // Deadlock is detected and the operation is not forced.
+            // Failed to make semaphore down.
+            return OperationResult::DeadlockDetected;
+        }
         
         let mut inner = self.inner.exclusive_access();
-        
-        // Allocate semaphore resource for the current thread.
-        let rid = inner.handle.rid();
-        let task = current_task().unwrap();
-        task.inner_exclusive_access()
-            .res
-            .as_mut()
-            .unwrap()
-            .resource_handles
-            .allocate(rid, 1); // TODO: deadlock detection
-        drop(task);
-        
         inner.count -= 1;
         if inner.count < 0 {
+            drop(inner);
+            self.dealloc_resource();
+            let mut inner = self.inner.exclusive_access();
             inner.wait_queue.push_back(current_task().unwrap());
             drop(inner);
             block_current_and_run_next();
         }
+
+        OperationResult::Done
     }
 }
