@@ -41,7 +41,7 @@ impl MutexSpin {
             .resource_handles
             .submit_need(rid, 1);
     }
-    
+
     fn remove_need(&self) {
         // Remove need for the mutex on current tid.
         let handle = self.handle.exclusive_access();
@@ -108,11 +108,11 @@ impl Mutex for MutexSpin {
                 continue;
             } else {
                 *locked = true;
-                
+
                 // Need is satisfied. Remove need and alloc resource.
                 self.remove_need();
-                self.alloc_resource(force);
-                
+                self.alloc_resource(true);
+
                 return OperationResult::Done;
             }
         }
@@ -244,7 +244,7 @@ impl Mutex for MutexBlocking {
 
         // Need is satisfied. Remove need and alloc resource.
         self.remove_need();
-        self.alloc_resource(force);
+        self.alloc_resource(true);
 
         OperationResult::Done
     }

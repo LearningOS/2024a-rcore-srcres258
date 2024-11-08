@@ -130,7 +130,7 @@ impl Semaphore {
 
         // Need is satisfied. Remove need and alloc resource.
         self.remove_need();
-        self.alloc_resource(force);
+        self.alloc_resource(true);
 
         OperationResult::Done
     }

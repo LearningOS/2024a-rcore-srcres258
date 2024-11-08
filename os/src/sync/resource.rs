@@ -1,6 +1,7 @@
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
+use crate::debug;
 use crate::sync::UPSafeCell;
 use crate::task::RecycleAllocator;
 
@@ -8,25 +9,35 @@ lazy_static! {
     static ref AVAILABLE: UPSafeCell<Vec<usize>> = unsafe {
         UPSafeCell::new({
             let mut result = Vec::new();
-            result.push(0);
+            for _ in 0 .. 100 {
+                result.push(0);
+            }
             result
         })
     };
     static ref ALLOCATION: UPSafeCell<Vec<Vec<usize>>> = unsafe {
         UPSafeCell::new({
             let mut inner = Vec::new();
-            inner.push(0);
+            for _ in 0 .. 100 {
+                inner.push(0);
+            }
             let mut result = Vec::new();
-            result.push(inner);
+            for _ in 0 .. 100 {
+                result.push(inner.clone());
+            }
             result
         })
     };
     static ref NEED: UPSafeCell<Vec<Vec<usize>>> = unsafe {
         UPSafeCell::new({
             let mut inner = Vec::new();
-            inner.push(0);
+            for _ in 0 .. 100 {
+                inner.push(0);
+            }
             let mut result = Vec::new();
-            result.push(inner);
+            for _ in 0 .. 100 {
+                result.push(inner.clone());
+            }
             result
         })
     };
@@ -73,13 +84,21 @@ pub struct ResourceConsumerHandle {
     amount: usize
 }
 
+pub struct ResourceNeedHandle {
+    tid: usize,
+    rid: usize,
+    amount: usize
+}
+
 /// A collection of resource consumer handles in order to
 /// manage them more conveniently.
 pub struct ResourceConsumerHandleCollection {
     /// Thread ID which the resources within this collection are possessed by.
     tid: usize,
     /// Consumer resource handles possessed by this collection.
-    handles: Vec<ResourceConsumerHandle>
+    handles: Vec<ResourceConsumerHandle>,
+    /// Need handles possessed by this collection.
+    needs: Vec<ResourceNeedHandle>
 }
 
 /// Operation result enum for syncing or locking operations
@@ -148,9 +167,12 @@ impl ResourceProducerHandle {
     fn deallocate(&self, amount: usize) {
         let rid = self.rid;
 
+        info!("ResourceProducerHandle: deallocating rid[{}] with amount[{}]",
+            rid, amount);
+
         adjust_available_vec_len(rid);
         let mut available = AVAILABLE.exclusive_access();
-        available[rid] -= amount;
+        available[rid] += amount;
 
         let mut inner = self.inner.exclusive_access();
         inner.amount += amount;
@@ -355,18 +377,32 @@ impl ResourceConsumerHandleCollection {
     pub fn new(tid: usize) -> ResourceConsumerHandleCollection {
         Self {
             tid,
-            handles: Vec::new()
+            handles: Vec::new(),
+            needs: Vec::new()
         }
     }
 
     /// Submit need of the given amount for deadlock calculating.
-    pub fn submit_need(&self, rid: usize, amount: usize) {
-        submit_need(self.tid, rid, amount);
+    pub fn submit_need(&mut self, rid: usize, amount: usize) {
+        let need = self.needs.iter_mut().find(|n| n.rid == rid);
+        match need {
+            Some(n) => {
+                n.submit(amount);
+            }
+            None => {
+                let mut n = ResourceNeedHandle::new(self.tid, rid);
+                n.submit(amount);
+                self.needs.push(n);
+            }
+        }
     }
 
     /// Remove need of the given amount for deadlock calculating.
-    pub fn remove_need(&self, rid: usize, amount: usize) {
-        remove_need(self.tid, rid, amount);
+    pub fn remove_need(&mut self, rid: usize, amount: usize) {
+        let need = self.needs.iter_mut().find(|n| n.rid == rid);
+        if let Some(n) = need {
+            n.remove(amount);
+        }
     }
 
     /// Attempt to allocate amount of the given resource within this collection.
@@ -415,6 +451,32 @@ impl ResourceConsumerHandleCollection {
         }
 
         false
+    }
+}
+
+impl ResourceNeedHandle {
+    pub fn new(tid: usize, rid: usize) -> ResourceNeedHandle {
+        Self {
+            tid,
+            rid,
+            amount: 0
+        }
+    }
+    
+    pub fn submit(&mut self, amount: usize) {
+        submit_need(self.tid, self.rid, amount);
+        self.amount += amount;
+    }
+    
+    pub fn remove(&mut self, amount: usize) {
+        remove_need(self.tid, self.rid, amount);
+        self.amount -= amount;
+    }
+}
+
+impl Drop for ResourceNeedHandle {
+    fn drop(&mut self) {
+        self.remove(self.amount);
     }
 }
 
@@ -572,7 +634,7 @@ fn remove_need(tid: usize, rid: usize, amount: usize) {
 }
 
 /// Detect whether deadlock might happen under the current circumstance.
-/// 
+///
 /// If there is a deadlock, true is returned.
 pub fn detect_deadlock() -> bool {
     info!("Beginning detect_deadlock");
@@ -603,12 +665,31 @@ pub fn detect_deadlock() -> bool {
     info!("thread_count={}, resource_count={}",
         thread_count, resource_count);
     let need = NEED.exclusive_access();
-    for i in 0 .. thread_count {
-        for j in 0 .. resource_count {
-            if need[i][j] <= work[j] {
-                work[j] += allocation[i][j];
-                finish[i] = true;
+    println!("[AVAILABLE]");
+    debug::print_vec(&available);
+    println!("[ALLOCATION]");
+    debug::print_vec_2d(&allocation);
+    println!("[NEED]");
+    debug::print_vec_2d(&need);
+    loop {
+        let mut should_leave_loop = true;
+        for i in 0 .. thread_count {
+            if !finish[i] {
+                let mut able_to_finish = true;
+                for j in 0 .. resource_count {
+                    able_to_finish = able_to_finish && (need[i][j] <= work[j]);
+                }
+                if able_to_finish {
+                    should_leave_loop = false;
+                    for j in 0 .. resource_count {
+                        work[j] += allocation[i][j];
+                    }
+                    finish[i] = true;
+                }
             }
+        }
+        if should_leave_loop {
+            break;
         }
     }
 
