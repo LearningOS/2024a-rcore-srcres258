@@ -1,15 +1,15 @@
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
-use crate::debug;
 use crate::sync::UPSafeCell;
 use crate::task::RecycleAllocator;
+use crate::debug;
 
 lazy_static! {
     static ref AVAILABLE: UPSafeCell<Vec<usize>> = unsafe {
         UPSafeCell::new({
             let mut result = Vec::new();
-            for _ in 0 .. 100 {
+            for _ in 0 .. 20 {
                 result.push(0);
             }
             result
@@ -18,11 +18,11 @@ lazy_static! {
     static ref ALLOCATION: UPSafeCell<Vec<Vec<usize>>> = unsafe {
         UPSafeCell::new({
             let mut inner = Vec::new();
-            for _ in 0 .. 100 {
+            for _ in 0 .. 20 {
                 inner.push(0);
             }
             let mut result = Vec::new();
-            for _ in 0 .. 100 {
+            for _ in 0 .. 20 {
                 result.push(inner.clone());
             }
             result
@@ -31,11 +31,11 @@ lazy_static! {
     static ref NEED: UPSafeCell<Vec<Vec<usize>>> = unsafe {
         UPSafeCell::new({
             let mut inner = Vec::new();
-            for _ in 0 .. 100 {
+            for _ in 0 .. 20 {
                 inner.push(0);
             }
             let mut result = Vec::new();
-            for _ in 0 .. 100 {
+            for _ in 0 .. 20 {
                 result.push(inner.clone());
             }
             result
