@@ -21,6 +21,7 @@ pub fn init_heap() {
     }
 }
 
+/// test heap allocation
 #[allow(unused)]
 pub fn heap_test() {
     use alloc::boxed::Box;

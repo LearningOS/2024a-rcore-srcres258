@@ -208,7 +208,7 @@ impl ResourceConsumerHandle {
 
         // Detect deadlock at first.
         submit_need(tid, rid, amount);
-        let deadlock = detect_deadlock(tid, rid);
+        let deadlock = detect_deadlock();
         remove_need(tid, rid, amount);
 
         // Can't allocate resource if deadlock is detected.
@@ -234,6 +234,16 @@ impl ResourceConsumerHandle {
         Some(Self { tid, rid, amount })
     }
 
+    /// Submit need of the given amount for deadlock calculating.
+    pub fn submit_need(&self, amount: usize) {
+        submit_need(self.tid, self.rid, amount);
+    }
+
+    /// Remove need of the given amount for deadlock calculating.
+    pub fn remove_need(&self, amount: usize) {
+        remove_need(self.tid, self.rid, amount);
+    }
+
     /// Attempt to allocate amount of resource with this resource handle.
     ///
     /// False is returned if failed to allocate the given amount of
@@ -252,7 +262,7 @@ impl ResourceConsumerHandle {
 
         // Detect deadlock at first.
         submit_need(tid, rid, amount);
-        let deadlock = detect_deadlock(tid, rid);
+        let deadlock = detect_deadlock();
         remove_need(tid, rid, amount);
 
         // Can't allocate resource if deadlock is detected.
@@ -347,6 +357,16 @@ impl ResourceConsumerHandleCollection {
             tid,
             handles: Vec::new()
         }
+    }
+
+    /// Submit need of the given amount for deadlock calculating.
+    pub fn submit_need(&self, rid: usize, amount: usize) {
+        submit_need(self.tid, rid, amount);
+    }
+
+    /// Remove need of the given amount for deadlock calculating.
+    pub fn remove_need(&self, rid: usize, amount: usize) {
+        remove_need(self.tid, rid, amount);
     }
 
     /// Attempt to allocate amount of the given resource within this collection.
@@ -552,7 +572,9 @@ fn remove_need(tid: usize, rid: usize, amount: usize) {
 }
 
 /// Detect whether deadlock might happen under the current circumstance.
-fn detect_deadlock(cur_tid: usize, cur_rid: usize) -> bool {
+/// 
+/// If there is a deadlock, true is returned.
+pub fn detect_deadlock() -> bool {
     info!("Beginning detect_deadlock");
 
     // Get thread count.
@@ -583,10 +605,6 @@ fn detect_deadlock(cur_tid: usize, cur_rid: usize) -> bool {
     let need = NEED.exclusive_access();
     for i in 0 .. thread_count {
         for j in 0 .. resource_count {
-            // For current thread, we only consider current resource.
-            if i == cur_tid && j != cur_rid {
-                continue;
-            }
             if need[i][j] <= work[j] {
                 work[j] += allocation[i][j];
                 finish[i] = true;

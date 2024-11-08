@@ -1,6 +1,6 @@
 //! Semaphore
 
-use crate::sync::{OperationResult, ResourceProducerHandle, UPSafeCell};
+use crate::sync::{detect_deadlock, OperationResult, ResourceProducerHandle, UPSafeCell};
 use crate::task::{block_current_and_run_next, current_task, wakeup_task, TaskControlBlock};
 use alloc::{collections::VecDeque, sync::Arc};
 
@@ -29,6 +29,34 @@ impl Semaphore {
                 })
             },
         }
+    }
+
+    fn submit_need(&self) {
+        let inner = self.inner.exclusive_access();
+
+        // Submit need for the semaphore on current tid.
+        let rid = inner.handle.rid();
+        let task = current_task().unwrap();
+        task.inner_exclusive_access()
+            .res
+            .as_mut()
+            .unwrap()
+            .resource_handles
+            .submit_need(rid, 1);
+    }
+
+    fn remove_need(&self) {
+        let inner = self.inner.exclusive_access();
+
+        // Remove need for the semaphore on current tid.
+        let rid = inner.handle.rid();
+        let task = current_task().unwrap();
+        task.inner_exclusive_access()
+            .res
+            .as_mut()
+            .unwrap()
+            .resource_handles
+            .remove_need(rid, 1);
     }
 
     fn alloc_resource(&self, force: bool) -> bool {
@@ -81,8 +109,10 @@ impl Semaphore {
     pub fn down(&self, force: bool) -> OperationResult {
         trace!("kernel: Semaphore::down");
 
-        // Allocate semaphore resource for the current thread.
-        if !self.alloc_resource(force) {
+        // Submit need of current tid on current rid.
+        self.submit_need();
+        // Detect deadlock.
+        if detect_deadlock() && !force {
             // Deadlock is detected and the operation is not forced.
             // Failed to make semaphore down.
             return OperationResult::DeadlockDetected;
@@ -91,13 +121,16 @@ impl Semaphore {
         let mut inner = self.inner.exclusive_access();
         inner.count -= 1;
         if inner.count < 0 {
-            drop(inner);
-            self.dealloc_resource();
-            let mut inner = self.inner.exclusive_access();
             inner.wait_queue.push_back(current_task().unwrap());
             drop(inner);
             block_current_and_run_next();
-        }
+        } else {
+            drop(inner);
+        } // inner has been completely dropped here.
+
+        // Need is satisfied. Remove need and alloc resource.
+        self.remove_need();
+        self.alloc_resource(force);
 
         OperationResult::Done
     }

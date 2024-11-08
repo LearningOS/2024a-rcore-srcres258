@@ -14,5 +14,6 @@ pub use resource::{
     ResourceProducerHandle,
     ResourceConsumerHandle,
     ResourceConsumerHandleCollection,
-    OperationResult
+    OperationResult,
+    detect_deadlock
 };

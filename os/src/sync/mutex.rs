@@ -1,6 +1,6 @@
 //! Mutex (spin-like and blocking(sleep))
 
-use super::{OperationResult, ResourceProducerHandle, UPSafeCell};
+use super::{detect_deadlock, OperationResult, ResourceProducerHandle, UPSafeCell};
 use crate::task::TaskControlBlock;
 use crate::task::{block_current_and_run_next, suspend_current_and_run_next};
 use crate::task::{current_task, wakeup_task};
@@ -27,6 +27,32 @@ impl MutexSpin {
             locked: unsafe { UPSafeCell::new(false) },
             handle: unsafe { UPSafeCell::new(ResourceProducerHandle::new(1)) }
         }
+    }
+
+    fn submit_need(&self) {
+        // Submit need for the mutex on current tid.
+        let handle = self.handle.exclusive_access();
+        let rid = handle.rid();
+        let task = current_task().unwrap();
+        task.inner_exclusive_access()
+            .res
+            .as_mut()
+            .unwrap()
+            .resource_handles
+            .submit_need(rid, 1);
+    }
+    
+    fn remove_need(&self) {
+        // Remove need for the mutex on current tid.
+        let handle = self.handle.exclusive_access();
+        let rid = handle.rid();
+        let task = current_task().unwrap();
+        task.inner_exclusive_access()
+            .res
+            .as_mut()
+            .unwrap()
+            .resource_handles
+            .remove_need(rid, 1);
     }
 
     /// If deadlock is detected, return false.
@@ -66,8 +92,10 @@ impl Mutex for MutexSpin {
     fn lock(&self, force: bool) -> OperationResult {
         trace!("kernel: MutexSpin::lock");
         loop {
-            // Try to allocate mutex resource for the current thread.
-            if !self.alloc_resource(force) {
+            // Submit need of current tid on current rid.
+            self.submit_need();
+            // Detect deadlock.
+            if detect_deadlock() && !force {
                 // Deadlock is detected and the operation is not forced.
                 // Failed to lock the mutex.
                 return OperationResult::DeadlockDetected;
@@ -75,12 +103,16 @@ impl Mutex for MutexSpin {
 
             let mut locked = self.locked.exclusive_access();
             if *locked {
-                self.dealloc_resource();
                 drop(locked);
                 suspend_current_and_run_next();
                 continue;
             } else {
                 *locked = true;
+                
+                // Need is satisfied. Remove need and alloc resource.
+                self.remove_need();
+                self.alloc_resource(force);
+                
                 return OperationResult::Done;
             }
         }
@@ -123,6 +155,36 @@ impl MutexBlocking {
         }
     }
 
+    fn submit_need(&self) {
+        let mutex_inner = self.inner.exclusive_access();
+
+        // Submit need for the mutex on current tid.
+        let rid = mutex_inner.handle.rid();
+        let task = current_task().unwrap();
+        task.inner_exclusive_access()
+            .res
+            .as_mut()
+            .unwrap()
+            .resource_handles
+            .submit_need(rid, 1);
+        drop(task);
+    }
+
+    fn remove_need(&self) {
+        let mutex_inner = self.inner.exclusive_access();
+
+        // Remove need for the mutex on current tid.
+        let rid = mutex_inner.handle.rid();
+        let task = current_task().unwrap();
+        task.inner_exclusive_access()
+            .res
+            .as_mut()
+            .unwrap()
+            .resource_handles
+            .remove_need(rid, 1);
+        drop(task);
+    }
+
     /// If deadlock is detected, return false.
     fn alloc_resource(&self, force: bool) -> bool {
         let mutex_inner = self.inner.exclusive_access();
@@ -161,8 +223,10 @@ impl Mutex for MutexBlocking {
     fn lock(&self, force: bool) -> OperationResult {
         trace!("kernel: MutexBlocking::lock");
 
-        // Try to allocate mutex resource for the current thread.
-        if !self.alloc_resource(force) {
+        // Submit need of current tid on current rid.
+        self.submit_need();
+        // Detect deadlock.
+        if detect_deadlock() && !force {
             // Deadlock is detected and the operation is not forced.
             // Failed to lock the mutex.
             return OperationResult::DeadlockDetected;
@@ -170,15 +234,17 @@ impl Mutex for MutexBlocking {
 
         let mut mutex_inner = self.inner.exclusive_access();
         if mutex_inner.locked {
-            drop(mutex_inner);
-            self.dealloc_resource();
-            let mut mutex_inner = self.inner.exclusive_access();
             mutex_inner.wait_queue.push_back(current_task().unwrap());
             drop(mutex_inner);
             block_current_and_run_next();
         } else {
             mutex_inner.locked = true;
-        }
+            drop(mutex_inner);
+        } // mutex_inner has been completely dropped here.
+
+        // Need is satisfied. Remove need and alloc resource.
+        self.remove_need();
+        self.alloc_resource(force);
 
         OperationResult::Done
     }
