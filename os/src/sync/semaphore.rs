@@ -1,6 +1,6 @@
 //! Semaphore
 
-use crate::sync::UPSafeCell;
+use crate::sync::{ResourceProducerHandle, UPSafeCell};
 use crate::task::{block_current_and_run_next, current_task, wakeup_task, TaskControlBlock};
 use alloc::{collections::VecDeque, sync::Arc};
 
@@ -13,6 +13,7 @@ pub struct Semaphore {
 pub struct SemaphoreInner {
     pub count: isize,
     pub wait_queue: VecDeque<Arc<TaskControlBlock>>,
+    handle: Arc<ResourceProducerHandle>
 }
 
 impl Semaphore {
@@ -24,6 +25,7 @@ impl Semaphore {
                 UPSafeCell::new(SemaphoreInner {
                     count: res_count as isize,
                     wait_queue: VecDeque::new(),
+                    handle: ResourceProducerHandle::new(res_count)
                 })
             },
         }
@@ -33,6 +35,18 @@ impl Semaphore {
     pub fn up(&self) {
         trace!("kernel: Semaphore::up");
         let mut inner = self.inner.exclusive_access();
+
+        // Deallocate semaphore resource for the current thread.
+        let rid = inner.handle.rid();
+        let task = current_task().unwrap();
+        task.inner_exclusive_access()
+            .res
+            .as_mut()
+            .unwrap()
+            .resource_handles
+            .deallocate(rid, 1);
+        drop(task);
+        
         inner.count += 1;
         if inner.count <= 0 {
             if let Some(task) = inner.wait_queue.pop_front() {
@@ -44,7 +58,20 @@ impl Semaphore {
     /// down operation of semaphore
     pub fn down(&self) {
         trace!("kernel: Semaphore::down");
+        
         let mut inner = self.inner.exclusive_access();
+        
+        // Allocate semaphore resource for the current thread.
+        let rid = inner.handle.rid();
+        let task = current_task().unwrap();
+        task.inner_exclusive_access()
+            .res
+            .as_mut()
+            .unwrap()
+            .resource_handles
+            .allocate(rid, 1); // TODO: deadlock detection
+        drop(task);
+        
         inner.count -= 1;
         if inner.count < 0 {
             inner.wait_queue.push_back(current_task().unwrap());

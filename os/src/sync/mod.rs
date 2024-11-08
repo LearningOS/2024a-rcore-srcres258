@@ -10,3 +10,4 @@ pub use condvar::Condvar;
 pub use mutex::{Mutex, MutexBlocking, MutexSpin};
 pub use semaphore::Semaphore;
 pub use up::UPSafeCell;
+pub use resource::{ResourceProducerHandle, ResourceConsumerHandle, ResourceConsumerHandleCollection};

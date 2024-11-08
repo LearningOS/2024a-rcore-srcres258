@@ -6,6 +6,7 @@ use crate::trap::TrapContext;
 use crate::{mm::PhysPageNum, sync::UPSafeCell};
 use alloc::sync::{Arc, Weak};
 use core::cell::RefMut;
+use crate::sync::ResourceConsumerHandleCollection;
 
 /// Task control block structure
 pub struct TaskControlBlock {
